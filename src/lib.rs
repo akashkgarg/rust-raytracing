@@ -93,27 +93,33 @@ fn hit_sphere(center: &Point, radius: f32, r: &Ray) -> f32 {
     }
 }
 
-fn ray_color(ray: &Ray) -> Color {
-    let center = Point3::new(0_f32,0_f32,-1_f32);
-    let t = hit_sphere(&center, 0.5, ray);
-    if t > 0.0 {
-        let n = UnitVector3::new_normalize(ray.at(t) - center);
-        let color = 0.5 * Vector3::new(n.x + 1.0, n.y + 1.0, n.z + 1.0);
-        return Color::new((255_f32 * color.x).round() as u8,
-                          (255_f32 * color.y).round() as u8,
-                          (255_f32 * color.z).round() as u8,
-                          255);
-    } else {
-        let t = 0.5*(ray.dir.y + 1.0);
-        Color::new((255_f32 * (1.0-t)).round() as u8,
-                   (255_f32 * (1.0-t)).round() as u8,
-                   (255_f32 * (1.0-t)).round() as u8,
-                   255) +
-            Color::new((255_f32 * 0.5 * t).round() as u8,
-                       (255_f32 * 0.7 * t).round() as u8,
-                       (255_f32 * t).round() as u8,
-                       255)
+fn ray_color<T: Hittable>(ray: &Ray, world: &Vec<T>) -> Color {
+    for item in world {
+        match item.hit(&ray, 0_f32, f32::MAX) {
+            None => continue,
+            Some(rec) => {
+                if rec.t > 0.0 {
+                    let color = 0.5 * Vector3::new(rec.n.x + 1.0,
+                                                   rec.n.y + 1.0,
+                                                   rec.n.z + 1.0);
+                    return Color::new((255_f32 * color.x).round() as u8,
+                                      (255_f32 * color.y).round() as u8,
+                                      (255_f32 * color.z).round() as u8,
+                                      255);
+                }
+            }
+        }
     }
+    // background
+    let t = 0.5*(ray.dir.y + 1.0);
+    Color::new((255_f32 * (1.0-t)).round() as u8,
+               (255_f32 * (1.0-t)).round() as u8,
+               (255_f32 * (1.0-t)).round() as u8,
+               255) +
+        Color::new((255_f32 * 0.5 * t).round() as u8,
+                   (255_f32 * 0.7 * t).round() as u8,
+                   (255_f32 * t).round() as u8,
+                   255)
 }
 
 // When the `wee_alloc` feature is enabled, use `wee_alloc` as the global
@@ -179,6 +185,13 @@ pub fn draw(
 fn render(width: u32, height: u32) -> Vec<u8>{
 
     let aspect: f32 = 16.0 / 9.0;
+
+    // world
+    let mut world = Vec::new();
+    world.push(Sphere{center: Point::new(0.0, 0.0, -1.0), radius: 0.5});
+    world.push(Sphere{center: Point::new(0.0, -100.5, -1.0), radius: 100.0});
+
+    // camera
     let viewport_height: f32 = 2.0;
     let viewport_width: f32 = aspect * viewport_height;
     let focal_length: f32 = 1.0;
@@ -187,6 +200,8 @@ fn render(width: u32, height: u32) -> Vec<u8>{
     let horizontal: Vec3 = Vector3::new(viewport_width, 0_f32, 0_f32);
     let vertical: Vec3 = Vector3::new(0_f32, viewport_height, 0_f32);
     let lower_left_corner: Point = origin - horizontal*0.5_f32 - vertical*0.5_f32 - Vector3::new(0_f32, 0_f32, focal_length);
+
+    // render
 
     let mut data = Vec::new();
     // image data goes from top to bottom
@@ -197,7 +212,7 @@ fn render(width: u32, height: u32) -> Vec<u8>{
 
             let ray = Ray{origin: origin,
                           dir: UnitVector3::new_normalize(lower_left_corner + u*horizontal + v*vertical - origin)};
-            let pixel = ray_color(&ray);
+            let pixel = ray_color(&ray, &world);
 
             // let r = i as f64 / (width-1) as f64;
             // let g = j as f64 / (height-1) as f64;
