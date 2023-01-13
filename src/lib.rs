@@ -8,10 +8,12 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen::Clamped;
 use js_sys::Math::sqrt;
 use js_sys::Math::pow;
+use js_sys::Math::tan;
 use nalgebra::{Point3, Vector3, Vector4, UnitVector3};
 use rand::Rng;
 use rand::rngs::ThreadRng;
 use almost;
+
 
 // A macro to provide `println!(..)`-style syntax for `console.log` logging.
 macro_rules! log {
@@ -210,37 +212,75 @@ impl Hittable for Sphere {
     }
 }
 
+#[wasm_bindgen]
 #[derive(Copy, Clone, Debug)]
-struct Camera {
+pub struct Camera {
     origin: Point,
     lower_left_corner: Point,
     horizontal: Vec3,
-    vertical:Vec3
+    vertical: Vec3,
+    u: Vec3,
+    v: Vec3,
+    w: Vec3,
+    lens_radius: f32
 }
 
+#[wasm_bindgen]
 impl Camera {
-    pub fn new() -> Self {
-        let aspect: f32 = 16.0 / 9.0;
+    pub fn new(lookfrom: &js_sys::Array,
+               lookat: &js_sys::Array,
+               vup: &js_sys::Array,
+               vfov: f32,
+               aspect: f32,
+               aperture: f32) -> Self {
+        let theta = vfov * (std::f32::consts::PI / 180.0);
+        let h = tan(theta as f64/ 2.0 ) as f32;
 
-        let viewport_height: f32 = 2.0;
+        log!("Got array: {:?}", lookfrom);
+
+        let viewport_height: f32 = 2.0 * h;
         let viewport_width: f32 = aspect * viewport_height;
         let focal_length: f32 = 1.0;
 
-        let origin: Point = Point3::new(0_f32,0_f32,0_f32);
-        let horizontal: Vec3 = Vector3::new(viewport_width, 0_f32, 0_f32);
-        let vertical: Vec3 = Vector3::new(0_f32, viewport_height, 0_f32);
-        let lower_left_corner: Point = origin - horizontal*0.5_f32 - vertical*0.5_f32 - Vector3::new(0_f32, 0_f32, focal_length);
+        let from: Point = Point::new(lookfrom.at(0).as_f64().unwrap() as f32,
+                                     lookfrom.at(1).as_f64().unwrap() as f32,
+                                     lookfrom.at(2).as_f64().unwrap() as f32);
+        let to: Point = Point::new(lookat.at(0).as_f64().unwrap() as f32,
+                                  lookat.at(1).as_f64().unwrap() as f32,
+                                  lookat.at(2).as_f64().unwrap() as f32);
+        let up = Vec3::new(vup.at(0).as_f64().unwrap() as f32,
+                           vup.at(1).as_f64().unwrap() as f32,
+                           vup.at(2).as_f64().unwrap() as f32);
+
+        let w = UnitVec3::new_normalize(from - to);
+        let u = UnitVec3::new_normalize(up.cross(&w));
+        let v = w.cross(&u);
+
+        let focus_dist: f32 = (to - from).norm();
+
+        let origin: Point = from;
+        let horizontal: Vec3 = focus_dist * viewport_width * u.into_inner();
+        let vertical: Vec3 = focus_dist * viewport_height * v;
+        let lower_left_corner: Point = origin - horizontal*0.5_f32 - vertical*0.5_f32 - focus_dist*w.into_inner();
 
         Camera{origin: origin,
                lower_left_corner: lower_left_corner,
                horizontal: horizontal,
-               vertical: vertical}
+               vertical: vertical,
+               u: u.into_inner(),
+               v: v,
+               w: w.into_inner(),
+               lens_radius: aperture / 2.0}
     }
+}
 
-    pub fn get_ray(&self, u: f32, v: f32) -> Ray {
-        Ray{origin: self.origin,
+impl Camera {
+    pub fn get_ray(&self, rng: &mut ThreadRng, s: f32, t: f32) -> Ray {
+        let rd = self.lens_radius * random_in_unit_disk(rng);
+        let offset = self.u * rd.x + self.v * rd.y;
+        Ray{origin: self.origin + offset,
             dir: UnitVector3::new_normalize(self.lower_left_corner +
-                                            u*self.horizontal + v*self.vertical - self.origin)}
+                                            s*self.horizontal + t*self.vertical - self.origin - offset)}
     }
 }
 
@@ -259,6 +299,18 @@ fn random_in_hemisphere(rng: &mut ThreadRng, normal: &Vec3) -> UnitVec3 {
     }
     else {
         return -in_unit_sphere;
+    }
+}
+
+fn random_in_unit_disk(rng: &mut ThreadRng) -> Vec3 {
+    loop {
+        let p = Vec3::new(rng.gen_range(-1.0..1.0),
+                          rng.gen_range(-1.0..1.0),
+                          0.0);
+        if p.dot(&p) >= 1.0 {
+            continue;
+        }
+        return p;
     }
 }
 
@@ -384,15 +436,16 @@ pub fn start() {
 #[wasm_bindgen]
 pub fn draw(
     ctx: &web_sys::CanvasRenderingContext2d,
+    camera: &Camera,
     width: u32,
     height: u32
 ) -> Result<(), JsValue> {
-    let mut data = render(width, height);
+    let mut data = render(camera, width, height);
     let data = web_sys::ImageData::new_with_u8_clamped_array_and_sh(Clamped(&mut data), width, height)?;
     ctx.put_image_data(&data, 0.0, 0.0)
 }
 
-fn render(width: u32, height: u32) -> Vec<u8>{
+fn render(camera: &Camera, width: u32, height: u32) -> Vec<u8>{
 
     let samples_per_pixel = 10;
     let max_depth = 10;
@@ -414,9 +467,6 @@ fn render(width: u32, height: u32) -> Vec<u8>{
     world.push(Sphere{center: Point::new(-1.0, 0.0, -1.0), radius: -0.4, mat: material_left.clone()});
     world.push(Sphere{center: Point::new(1.0, 0.0, -1.0), radius: 0.5, mat: material_right});
 
-    // camera
-    let camera = Camera::new();
-
     // render
 
     let mut data = Vec::new();
@@ -433,7 +483,7 @@ fn render(width: u32, height: u32) -> Vec<u8>{
                 let v = (j as f32 + rng.gen::<f32>()) / (height-1) as f32;
                 // let u = (i as f32) / (width-1) as f32;
                 // let v = (j as f32) / (height-1) as f32;
-                let ray = camera.get_ray(u, v);
+                let ray = camera.get_ray(&mut rng, u, v);
                 pixel_color += ray_color(&ray, &world, &mut rng, max_depth);
             }
 
