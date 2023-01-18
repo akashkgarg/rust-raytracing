@@ -1,4 +1,9 @@
 mod utils;
+mod types;
+mod texture;
+
+use types::*;
+use texture::*;
 
 use std::f64;
 use std::fmt;
@@ -9,7 +14,8 @@ use wasm_bindgen::Clamped;
 use js_sys::Math::sqrt;
 use js_sys::Math::pow;
 use js_sys::Math::tan;
-use nalgebra::{Point3, Vector3, Vector4, UnitVector3};
+use js_sys::Math::acos;
+use js_sys::Math::atan2;
 use rand::Rng;
 use rand::rngs::ThreadRng;
 use almost;
@@ -22,23 +28,19 @@ macro_rules! log {
     }
 }
 
-// RGBA color value, [0,255]
-type Color = Vector4<u8>;
-type Point = Point3<f32>;
-type Vec3 = Vector3<f32>;
-type UnitVec3 = UnitVector3<f32>;
-
 #[derive(Copy,Clone,Debug)]
 pub struct Ray {
     origin: Point,
     dir: UnitVec3
 }
 
-#[derive(Clone,Debug)]
+#[derive(Clone)]
 pub struct HitRecord {
     pt: Point,
     n: UnitVec3,
     t: f32,
+    u: f32,
+    v: f32,
     front_face: bool,
     mat: Box<dyn Material>
 }
@@ -65,7 +67,7 @@ pub trait MaterialClone {
 
 impl<T> MaterialClone for T
 where
-    T: 'static + Material + Clone + Debug
+    T: 'static + Material + Clone
 {
     fn clone_box(&self) -> Box<dyn Material> {
         Box::new(self.clone())
@@ -79,26 +81,18 @@ impl Clone for Box<dyn Material> {
     }
 }
 
-impl Debug for Box<dyn Material> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // TODO: what should go here?
-        //(*self).fmt(f)
-        Ok(())
-    }
-}
-
-#[derive(Clone,Debug)]
+#[derive(Clone)]
 struct Lambertian {
-    albedo: Vec3
+    albedo: Box<dyn Texture>
 }
 
-#[derive(Clone,Debug)]
+#[derive(Clone)]
 struct Metal {
     albedo: Vec3,
     fuzz: f32
 }
 
-#[derive(Clone,Debug)]
+#[derive(Clone)]
 struct Dielectric {
     ir: f32 // index of refraction
 }
@@ -114,7 +108,7 @@ impl Dielectric {
 
 impl Material for Lambertian {
     fn scatter(&self, rng: &mut ThreadRng, _ray: &Ray, rec: &HitRecord) -> Option<(Vec3, Ray)> {
-        let attenuation = self.albedo;
+        let attenuation = self.albedo.value(rng, rec.u, rec.v, &rec.pt);
         let scatter_direction = rec.n.into_inner() + random_in_hemisphere(rng, &rec.n).into_inner();
 
         if scatter_direction.iter().any(|&v| almost::zero(v)) {
@@ -175,6 +169,26 @@ struct Sphere {
     mat: Box<dyn Material>
 }
 
+impl Sphere {
+    fn get_sphere_uv(&self, p: &Point) -> (f32, f32) {
+        // p: a given point on the sphere of radius one, centered at the origin.
+        // u: returned value [0,1] of angle around the Y axis from X=-1.
+        // v: returned value [0,1] of angle from Y=-1 to Y=+1.
+        //     <1 0 0> yields <0.50 0.50>       <-1  0  0> yields <0.00 0.50>
+        //     <0 1 0> yields <0.50 1.00>       < 0 -1  0> yields <0.50 0.00>
+        //     <0 0 1> yields <0.25 0.50>       < 0  0 -1> yields <0.75 0.50>
+
+        let pi = std::f32::consts::PI;
+        let theta = acos(-p.y as f64) as f32;
+        let phi = atan2(-p.z as f64, p.x as f64) as f32 + pi;
+
+        let u = phi / (2.0*pi);
+        let v = theta / pi;
+
+        (u, v)
+    }
+}
+
 impl Hittable for Sphere {
     fn hit(&self, r: &Ray, t_min: f32, t_max: f32) -> Option<HitRecord> {
         let oc = r.origin - self.center;
@@ -201,12 +215,16 @@ impl Hittable for Sphere {
         // we divide by radius here even though we are normalizing since a
         // negative radius will invert the normals, which might be something we
         // want to glass spheres.
-        let n = UnitVector3::new_normalize((r.at(root) - self.center) / self.radius);
+        let n = UnitVec3::new_normalize((r.at(root) - self.center) / self.radius);
         let front_face = r.dir.dot(&n) <= 0_f32;
+
+        let (u,v) = self.get_sphere_uv(&r.at(root));
 
         return Some(HitRecord{pt: r.at(root),
                               n: if front_face { n } else { -n },
                               t: root,
+                              u: u,
+                              v: v,
                               front_face: front_face,
                               mat: self.mat.clone()})
     }
@@ -279,7 +297,7 @@ impl Camera {
         let rd = self.lens_radius * random_in_unit_disk(rng);
         let offset = self.u * rd.x + self.v * rd.y;
         Ray{origin: self.origin + offset,
-            dir: UnitVector3::new_normalize(self.lower_left_corner +
+            dir: UnitVec3::new_normalize(self.lower_left_corner +
                                             s*self.horizontal + t*self.vertical - self.origin - offset)}
     }
 }
@@ -454,9 +472,11 @@ fn render(camera: &Camera, width: u32, height: u32) -> Vec<u8>{
     let mut world = Vec::new();
 
     // materials
-    let material_ground = Box::new(Lambertian{albedo: Vec3::new(0.8, 0.8, 0.0)});
+    //let material_ground = Box::new(Lambertian{albedo: Box::new(ConstantTexture{color: Vec3::new(0.8, 0.8, 0.0)})});
+    let material_ground = Box::new(Lambertian{albedo: Box::new(CheckerTexture::new(Vec3::new(0.3, 0.2, 0.1),
+                                                                                   Vec3::new(0.9, 0.9, 0.9)))});
     //let material_center = Box::new(Lambertian{albedo: Vec3::new(0.7, 0.3, 0.3)});
-    let material_center = Box::new(Lambertian{albedo: Vec3::new(0.1, 0.2, 0.5)});
+    let material_center = Box::new(Lambertian{albedo: Box::new(ConstantTexture{color: Vec3::new(0.1, 0.2, 0.5)})});
     // let material_left = Box::new(Metal{albedo: Vec3::new(0.8, 0.8, 0.8), fuzz: 0.3});
     let material_left = Box::new(Dielectric{ir: 1.5});
     let material_right = Box::new(Metal{albedo: Vec3::new(0.8, 0.6, 0.2), fuzz: 0.0});
