@@ -49,9 +49,12 @@ impl Ray {
 }
 
 // scatters an incoming ray and outputs the color attenuation and the scattered
-// ray.
+// ray. Also optionally for emissive materials, e.g., lights, outputs a color
 pub trait Material: MaterialClone {
     fn scatter(&self, rng: &mut ThreadRng, ray: &Ray, rec: &HitRecord) -> Option<(Vec3, Ray)>;
+    fn emitted(&self, rng: &mut ThreadRng, u: f32, v: f32, p: &Point) -> Vec3 {
+        Vec3::new(0.0, 0.0, 0.0)
+    }
 }
 
 pub trait MaterialClone {
@@ -77,6 +80,11 @@ impl Clone for Box<dyn Material> {
 #[derive(Clone)]
 struct Lambertian {
     albedo: Box<dyn Texture>
+}
+
+#[derive(Clone)]
+struct DiffuseLight {
+    emit: Box<dyn Texture>
 }
 
 #[derive(Clone)]
@@ -111,6 +119,15 @@ impl Material for Lambertian {
                           dir: UnitVec3::new_normalize(scatter_direction)};
             return Some((attenuation, ray));
         }
+    }
+}
+
+impl Material for DiffuseLight {
+    fn scatter(&self, rng: &mut ThreadRng, _ray: &Ray, rec: &HitRecord) -> Option<(Vec3, Ray)> {
+        None
+    }
+    fn emitted(&self, rng: &mut ThreadRng, u: f32, v: f32, p: &Point) -> Vec3 {
+        self.emit.value(rng, u, v, p)
     }
 }
 
@@ -223,6 +240,48 @@ impl Hittable for Sphere {
     }
 }
 
+struct XYRect {
+    x0: f32,
+    x1: f32,
+    y0: f32,
+    y1: f32,
+    k: f32,
+    mat: Box<dyn Material>
+}
+
+impl XYRect {
+    fn new(x0: f32, x1: f32, y0: f32, y1: f32, k: f32, mat: Box<dyn Material>) -> Self {
+        Self{x0: x0, x1: x1, y0: y0, y1: y1, k: k, mat: mat}
+    }
+}
+
+impl Hittable for XYRect {
+    fn hit(&self, r: &Ray, t_min: f32, t_max: f32) -> Option<HitRecord> {
+        let t = (self.k - r.origin.z) / r.dir.z;
+        if t < t_min || t > t_max {
+            return None
+        }
+        let x = r.origin.x + t*r.dir.x;
+        let y = r.origin.y + t*r.dir.y;
+        if x < self.x0 || x > self.x1 || y < self.y0 || y > self.y1 {
+            return None
+        }
+
+        let u = (x-self.x0)/(self.x1-self.x0);
+        let v = (y-self.y0)/(self.y1-self.y0);
+        let n = Vec3::z_axis();
+        let front_face = r.dir.dot(&n) <= 0_f32;
+
+        return Some(HitRecord{pt: r.at(t),
+                              n: if front_face { n } else { -n },
+                              t: t,
+                              u: u,
+                              v: v,
+                              front_face: front_face,
+                              mat: self.mat.clone()})
+    }
+}
+
 #[wasm_bindgen]
 #[derive(Copy, Clone, Debug)]
 pub struct Camera {
@@ -308,7 +367,8 @@ fn hit_sphere(center: &Point, radius: f32, r: &Ray) -> f32 {
     }
 }
 
-fn ray_color<T: Hittable>(ray: &Ray, world: &Vec<T>, rng: &mut ThreadRng, depth: u32) -> Vec3 {
+fn ray_color(ray: &Ray, bg_color: &Vec3,
+             world: &Vec<Box<dyn Hittable>>, rng: &mut ThreadRng, depth: u32) -> Vec3 {
 
     // exceeded ray bounce limit, no more light is gathered
     if depth <= 0 {
@@ -329,11 +389,12 @@ fn ray_color<T: Hittable>(ray: &Ray, world: &Vec<T>, rng: &mut ThreadRng, depth:
             match hit {
                 // get the hit record if there is one
                 Some(rec) =>  {
+                    let emitted = rec.mat.emitted(rng, rec.u, rec.v, &rec.pt);
                     let color = match rec.mat.scatter(rng, &ray, &rec) {
                         Some((attenuation, scattered_ray)) => {
-                            attenuation.component_mul(&ray_color(&scattered_ray, world, rng, depth - 1))
+                            emitted + attenuation.component_mul(&ray_color(&scattered_ray, bg_color, world, rng, depth - 1))
                         },
-                        None => Vec3::new(0.0,0.0,0.0)
+                        None => emitted
                     };
                     return color;
                 },
@@ -361,8 +422,9 @@ fn ray_color<T: Hittable>(ray: &Ray, world: &Vec<T>, rng: &mut ThreadRng, depth:
     // }
 
     // background
-    let t = 0.5*(ray.dir.y + 1.0);
-    Vec3::new(1.0-t, 1.0-t, 1.0-t) + Vec3::new(0.5 * t, 0.7 * t, t)
+    *bg_color
+    // let t = 0.5*(ray.dir.y + 1.0);
+    // Vec3::new(1.0-t, 1.0-t, 1.0-t) + Vec3::new(0.5 * t, 0.7 * t, t)
 }
 
 // When the `wee_alloc` feature is enabled, use `wee_alloc` as the global
@@ -430,16 +492,21 @@ fn render(camera: &Camera, width: u32, height: u32) -> Vec<u8>{
 
     let mut rng = rand::thread_rng();
 
-    let samples_per_pixel = 10;
+    let samples_per_pixel = 100;
     let max_depth = 10;
 
+    let bg_color = Vec3::new(0.0, 0.0, 0.0);
+
     // world
-    let mut world = Vec::new();
+    let mut world: Vec<Box<dyn Hittable>> = Vec::new();
     let perlin1 = Box::new(Lambertian{albedo: Box::new(PerlinTexture::new(&mut rng, 4.0))});
     let perlin2 = Box::new(Lambertian{albedo: Box::new(PerlinTexture::new(&mut rng, 4.0))});
-    world.push(Sphere{center: Point::new(0.0, -1000.0, 0.0), radius: 1000.0, mat: perlin1});
-    world.push(Sphere{center: Point::new(0.0, 2.0, 0.0), radius: 2.0, mat: perlin2});
+    world.push(Box::new(Sphere{center: Point::new(0.0, -1000.0, 0.0), radius: 1000.0, mat: perlin1}));
+    world.push(Box::new(Sphere{center: Point::new(0.0, 2.0, 0.0), radius: 2.0, mat: perlin2}));
 
+    let difflight = Box::new(DiffuseLight{emit: Box::new(ConstantTexture{color: Vec3::new(4.0, 4.0, 4.0)})});
+    world.push(Box::new(Sphere{center: Point::new(0.0, 8.0, 0.0), radius: 2.0, mat: difflight.clone()}));
+    world.push(Box::new(XYRect::new(3.0, 5.0, 1.0, 3.0, -2.0, difflight)));
 
     // materials
     //let material_ground = Box::new(Lambertian{albedo: Box::new(ConstantTexture{color: Vec3::new(0.8, 0.8, 0.0)})});
@@ -471,7 +538,7 @@ fn render(camera: &Camera, width: u32, height: u32) -> Vec<u8>{
                 // let u = (i as f32) / (width-1) as f32;
                 // let v = (j as f32) / (height-1) as f32;
                 let ray = camera.get_ray(&mut rng, u, v);
-                pixel_color += ray_color(&ray, &world, &mut rng, max_depth);
+                pixel_color += ray_color(&ray, &bg_color, &world, &mut rng, max_depth);
             }
 
             pixel_color /= samples_per_pixel as f32;

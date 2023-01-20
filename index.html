@@ -76,7 +76,8 @@
              canvas.height = canvas.width / aspect;
 
              //const camera = Camera.new([3,3,2], [0,0,-1], [0,1,0], 20, aspect, aperture);
-             const camera = Camera.new([13,2,3], [0,0,0], [0,1,0], 20, aspect, aperture);
+             //const camera = Camera.new([13,2,3], [0,0,0], [0,1,0], 20, aspect, aperture);
+             const camera = Camera.new([26,3,6], [0,2,0], [0,1,0], 20, aspect, aperture);
 
              const ctx = canvas.getContext('2d');
              draw(ctx, camera, canvas.width, canvas.height);
