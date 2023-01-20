@@ -4,6 +4,7 @@ mod texture;
 
 use types::*;
 use texture::*;
+use utils::*;
 
 use std::f64;
 use std::fmt;
@@ -19,14 +20,6 @@ use js_sys::Math::atan2;
 use rand::Rng;
 use rand::rngs::ThreadRng;
 use almost;
-
-
-// A macro to provide `println!(..)`-style syntax for `console.log` logging.
-macro_rules! log {
-    ( $( $t:tt )* ) => {
-        web_sys::console::log_1(&format!( $( $t )* ).into());
-    }
-}
 
 #[derive(Copy,Clone,Debug)]
 pub struct Ray {
@@ -302,36 +295,6 @@ impl Camera {
     }
 }
 
-fn random_in_unit_sphere(rng: &mut ThreadRng) -> UnitVec3 {
-    let p = Vec3::new(rng.gen_range(-1.0..1.0),
-                      rng.gen_range(-1.0..1.0),
-                      rng.gen_range(-1.0..1.0));
-    return UnitVec3::new_normalize(p);
-}
-
-fn random_in_hemisphere(rng: &mut ThreadRng, normal: &Vec3) -> UnitVec3 {
-    let in_unit_sphere = random_in_unit_sphere(rng);
-    if in_unit_sphere.dot(&normal) > 0.0 {
-        // In the same hemisphere as the normal
-        return in_unit_sphere;
-    }
-    else {
-        return -in_unit_sphere;
-    }
-}
-
-fn random_in_unit_disk(rng: &mut ThreadRng) -> Vec3 {
-    loop {
-        let p = Vec3::new(rng.gen_range(-1.0..1.0),
-                          rng.gen_range(-1.0..1.0),
-                          0.0);
-        if p.dot(&p) >= 1.0 {
-            continue;
-        }
-        return p;
-    }
-}
-
 fn hit_sphere(center: &Point, radius: f32, r: &Ray) -> f32 {
     let oc = r.origin - center;
     let a = r.dir.dot(&r.dir);
@@ -465,27 +428,33 @@ pub fn draw(
 
 fn render(camera: &Camera, width: u32, height: u32) -> Vec<u8>{
 
+    let mut rng = rand::thread_rng();
+
     let samples_per_pixel = 10;
     let max_depth = 10;
 
     // world
     let mut world = Vec::new();
+    let perlin1 = Box::new(Lambertian{albedo: Box::new(PerlinTexture::new(&mut rng, 4.0))});
+    let perlin2 = Box::new(Lambertian{albedo: Box::new(PerlinTexture::new(&mut rng, 4.0))});
+    world.push(Sphere{center: Point::new(0.0, -1000.0, 0.0), radius: 1000.0, mat: perlin1});
+    world.push(Sphere{center: Point::new(0.0, 2.0, 0.0), radius: 2.0, mat: perlin2});
+
 
     // materials
     //let material_ground = Box::new(Lambertian{albedo: Box::new(ConstantTexture{color: Vec3::new(0.8, 0.8, 0.0)})});
-    let material_ground = Box::new(Lambertian{albedo: Box::new(CheckerTexture::new(Vec3::new(0.3, 0.2, 0.1),
-                                                                                   Vec3::new(0.9, 0.9, 0.9)))});
+    //let material_ground = Box::new(Lambertian{albedo: Box::new(CheckerTexture::new(Vec3::new(0.3, 0.2, 0.1),
     //let material_center = Box::new(Lambertian{albedo: Vec3::new(0.7, 0.3, 0.3)});
-    let material_center = Box::new(Lambertian{albedo: Box::new(ConstantTexture{color: Vec3::new(0.1, 0.2, 0.5)})});
+    //let material_center = Box::new(Lambertian{albedo: Box::new(ConstantTexture{color: Vec3::new(0.1, 0.2, 0.5)})});
     // let material_left = Box::new(Metal{albedo: Vec3::new(0.8, 0.8, 0.8), fuzz: 0.3});
-    let material_left = Box::new(Dielectric{ir: 1.5});
-    let material_right = Box::new(Metal{albedo: Vec3::new(0.8, 0.6, 0.2), fuzz: 0.0});
+    //let material_left = Box::new(Dielectric{ir: 1.5});
+    //let material_right = Box::new(Metal{albedo: Vec3::new(0.8, 0.6, 0.2), fuzz: 0.0});
 
-    world.push(Sphere{center: Point::new(0.0, -100.5, -1.0), radius: 100.0, mat: material_ground});
-    world.push(Sphere{center: Point::new(0.0, 0.0, -1.0), radius: 0.5, mat: material_center});
-    world.push(Sphere{center: Point::new(-1.0, 0.0, -1.0), radius: 0.5, mat: material_left.clone()});
-    world.push(Sphere{center: Point::new(-1.0, 0.0, -1.0), radius: -0.4, mat: material_left.clone()});
-    world.push(Sphere{center: Point::new(1.0, 0.0, -1.0), radius: 0.5, mat: material_right});
+    // world.push(Sphere{center: Point::new(0.0, -100.5, -1.0), radius: 100.0, mat: material_ground});
+    // world.push(Sphere{center: Point::new(0.0, 0.0, -1.0), radius: 0.5, mat: material_center});
+    // world.push(Sphere{center: Point::new(-1.0, 0.0, -1.0), radius: 0.5, mat: material_left.clone()});
+    // world.push(Sphere{center: Point::new(-1.0, 0.0, -1.0), radius: -0.4, mat: material_left.clone()});
+    // world.push(Sphere{center: Point::new(1.0, 0.0, -1.0), radius: 0.5, mat: material_right});
 
     // render
 
@@ -495,8 +464,6 @@ fn render(camera: &Camera, width: u32, height: u32) -> Vec<u8>{
         for i in 0..width {
 
             let mut pixel_color: Vec3 = Vec3::new(0.0,0.0,0.0);
-
-            let mut rng = rand::thread_rng();
 
             for _ in 0..samples_per_pixel {
                 let u = (i as f32 + rng.gen::<f32>()) / (width-1) as f32;
