@@ -282,6 +282,90 @@ impl Hittable for XYRect {
     }
 }
 
+struct XZRect {
+    x0: f32,
+    x1: f32,
+    z0: f32,
+    z1: f32,
+    k: f32,
+    mat: Box<dyn Material>
+}
+
+impl XZRect {
+    fn new(x0: f32, x1: f32, z0: f32, z1: f32, k: f32, mat: Box<dyn Material>) -> Self {
+        Self{x0: x0, x1: x1, z0: z0, z1: z1, k: k, mat: mat}
+    }
+}
+
+impl Hittable for XZRect {
+    fn hit(&self, r: &Ray, t_min: f32, t_max: f32) -> Option<HitRecord> {
+        let t = (self.k - r.origin.y) / r.dir.y;
+        if t < t_min || t > t_max {
+            return None
+        }
+        let x = r.origin.x + t*r.dir.x;
+        let z = r.origin.z + t*r.dir.z;
+        if x < self.x0 || x > self.x1 || z < self.z0 || z > self.z1 {
+            return None
+        }
+
+        let u = (x-self.x0)/(self.x1-self.x0);
+        let v = (z-self.z0)/(self.z1-self.z0);
+        let n = Vec3::y_axis();
+        let front_face = r.dir.dot(&n) <= 0_f32;
+
+        return Some(HitRecord{pt: r.at(t),
+                              n: if front_face { n } else { -n },
+                              t: t,
+                              u: u,
+                              v: v,
+                              front_face: front_face,
+                              mat: self.mat.clone()})
+    }
+}
+
+struct YZRect {
+    y0: f32,
+    y1: f32,
+    z0: f32,
+    z1: f32,
+    k: f32,
+    mat: Box<dyn Material>
+}
+
+impl YZRect {
+    fn new(y0: f32, y1: f32, z0: f32, z1: f32, k: f32, mat: Box<dyn Material>) -> Self {
+        Self{y0: y0, y1: y1, z0: z0, z1: z1, k: k, mat: mat}
+    }
+}
+
+impl Hittable for YZRect {
+    fn hit(&self, r: &Ray, t_min: f32, t_max: f32) -> Option<HitRecord> {
+        let t = (self.k - r.origin.x) / r.dir.x;
+        if t < t_min || t > t_max {
+            return None
+        }
+        let y = r.origin.y + t*r.dir.y;
+        let z = r.origin.z + t*r.dir.z;
+        if y < self.y0 || y > self.y1 || z < self.z0 || z > self.z1 {
+            return None
+        }
+
+        let u = (y-self.y0)/(self.y1-self.y0);
+        let v = (z-self.z0)/(self.z1-self.z0);
+        let n = Vec3::x_axis();
+        let front_face = r.dir.dot(&n) <= 0_f32;
+
+        return Some(HitRecord{pt: r.at(t),
+                              n: if front_face { n } else { -n },
+                              t: t,
+                              u: u,
+                              v: v,
+                              front_face: front_face,
+                              mat: self.mat.clone()})
+    }
+}
+
 #[wasm_bindgen]
 #[derive(Copy, Clone, Debug)]
 pub struct Camera {
@@ -488,25 +572,50 @@ pub fn draw(
     ctx.put_image_data(&data, 0.0, 0.0)
 }
 
-fn render(camera: &Camera, width: u32, height: u32) -> Vec<u8>{
-
-    let mut rng = rand::thread_rng();
-
-    let samples_per_pixel = 100;
-    let max_depth = 10;
-
-    let bg_color = Vec3::new(0.0, 0.0, 0.0);
-
-    // world
+fn sphere_diffuse_light(rng: &mut ThreadRng) -> Vec<Box<dyn Hittable>> {
     let mut world: Vec<Box<dyn Hittable>> = Vec::new();
-    let perlin1 = Box::new(Lambertian{albedo: Box::new(PerlinTexture::new(&mut rng, 4.0))});
-    let perlin2 = Box::new(Lambertian{albedo: Box::new(PerlinTexture::new(&mut rng, 4.0))});
+    let perlin1 = Box::new(Lambertian{albedo: Box::new(PerlinTexture::new(rng, 4.0))});
+    let perlin2 = Box::new(Lambertian{albedo: Box::new(PerlinTexture::new(rng, 4.0))});
     world.push(Box::new(Sphere{center: Point::new(0.0, -1000.0, 0.0), radius: 1000.0, mat: perlin1}));
     world.push(Box::new(Sphere{center: Point::new(0.0, 2.0, 0.0), radius: 2.0, mat: perlin2}));
 
     let difflight = Box::new(DiffuseLight{emit: Box::new(ConstantTexture{color: Vec3::new(4.0, 4.0, 4.0)})});
     world.push(Box::new(Sphere{center: Point::new(0.0, 8.0, 0.0), radius: 2.0, mat: difflight.clone()}));
     world.push(Box::new(XYRect::new(3.0, 5.0, 1.0, 3.0, -2.0, difflight)));
+    world
+}
+
+fn empty_cornell_box(rng: &mut ThreadRng) -> Vec<Box<dyn Hittable>> {
+    let mut world: Vec<Box<dyn Hittable>> = Vec::new();
+    let red = Box::new(Lambertian{albedo: Box::new(ConstantTexture{color: Vec3::new(0.65, 0.05, 0.05)})});
+    let white = Box::new(Lambertian{albedo: Box::new(ConstantTexture{color: Vec3::new(0.73, 0.73, 0.73)})});
+    let green = Box::new(Lambertian{albedo: Box::new(ConstantTexture{color: Vec3::new(0.12, 0.45, 0.15)})});
+    let light = Box::new(DiffuseLight{emit: Box::new(ConstantTexture{color: Vec3::new(15.0, 15.0, 15.0)})});
+
+    world.push(Box::new(YZRect::new(0.0, 555.0, 0.0, 555.0, 555.0, green.clone())));
+    world.push(Box::new(YZRect::new(0.0, 555.0, 0.0, 555.0, 0.0, red.clone())));
+
+    world.push(Box::new(XZRect::new(213.0, 343.0, 227.0, 332.0, 554.0, light.clone())));
+
+    world.push(Box::new(XZRect::new(0.0, 555.0, 0.0, 555.0, 0.0, white.clone())));
+    world.push(Box::new(XZRect::new(0.0, 555.0, 0.0, 555.0, 555.0, white.clone())));
+    world.push(Box::new(XYRect::new(0.0, 555.0, 0.0, 555.0, 555.0, white.clone())));
+
+    world
+}
+
+fn render(camera: &Camera, width: u32, height: u32) -> Vec<u8>{
+
+    let mut rng = rand::thread_rng();
+
+    let samples_per_pixel = 10;
+    let max_depth = 10;
+
+    let bg_color = Vec3::new(0.0, 0.0, 0.0);
+
+    // world
+    //let world = sphere_diffuse_light(&mut rng);
+    let world = empty_cornell_box(&mut rng);
 
     // materials
     //let material_ground = Box::new(Lambertian{albedo: Box::new(ConstantTexture{color: Vec3::new(0.8, 0.8, 0.0)})});

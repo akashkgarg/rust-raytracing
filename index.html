@@ -70,14 +70,22 @@
              // Give the canvas room for all of our cells and a 1px border
              // around each of them.
              const canvas = document.getElementById("raytracing-canvas");
-             const aspect = 16.0 / 9.0;
+             var aspect = 16.0 / 9.0;
              const aperture = 0.0;
-             canvas.width = 256;
-             canvas.height = canvas.width / aspect;
 
              //const camera = Camera.new([3,3,2], [0,0,-1], [0,1,0], 20, aspect, aperture);
              //const camera = Camera.new([13,2,3], [0,0,0], [0,1,0], 20, aspect, aperture);
-             const camera = Camera.new([26,3,6], [0,2,0], [0,1,0], 20, aspect, aperture);
+
+             // sphere_diffuse_light
+             // canvas.width = 256;
+             // canvas.height = canvas.width / aspect;
+             // const camera = Camera.new([26,3,6], [0,2,0], [0,1,0], 20, aspect, aperture);
+
+             // cornell box
+             aspect = 1.0;
+             canvas.width = 256;
+             canvas.height = canvas.width / aspect;
+             const camera = Camera.new([278, 278, -800], [278, 278,0], [0,1,0], 40, aspect, aperture);
 
              const ctx = canvas.getContext('2d');
              draw(ctx, camera, canvas.width, canvas.height);
