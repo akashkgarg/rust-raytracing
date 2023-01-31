@@ -366,6 +366,46 @@ impl Hittable for YZRect {
     }
 }
 
+struct Cube {
+    box_min: Point,
+    box_max: Point,
+    sides: Vec<Box<dyn Hittable>>
+}
+
+impl Cube {
+    fn new(p0: &Point, p1: &Point, mat: Box<dyn Material>) -> Self {
+        let mut sides: Vec<Box<dyn Hittable>> = Vec::new();
+        sides.push(Box::new(XYRect::new(p0.x, p1.x, p0.y, p1.y, p1.z, mat.clone())));
+        sides.push(Box::new(XYRect::new(p0.x, p1.x, p0.y, p1.y, p0.z, mat.clone())));
+
+        sides.push(Box::new(XZRect::new(p0.x, p1.x, p0.z, p1.z, p1.y, mat.clone())));
+        sides.push(Box::new(XZRect::new(p0.x, p1.x, p0.z, p1.z, p0.y, mat.clone())));
+
+        sides.push(Box::new(YZRect::new(p0.y, p1.y, p0.z, p1.z, p1.x, mat.clone())));
+        sides.push(Box::new(YZRect::new(p0.y, p1.y, p0.z, p1.z, p0.x, mat.clone())));
+
+        Cube{box_min: *p0,
+             box_max: *p1,
+             sides: sides}
+    }
+}
+
+impl Hittable for Cube {
+    fn hit(&self, r: &Ray, t_min: f32, t_max: f32) -> Option<HitRecord> {
+        let closest_hit = self.sides.iter().map(|item| item.hit(r, t_min, t_max))
+                                           .filter(|val| val.is_some())
+                                           .min_by(|a,b| {
+                                               let at: f32 = a.as_ref().unwrap().t;
+                                               let bt: f32 = b.as_ref().unwrap().t;
+                                               at.total_cmp(&bt)
+                                           });
+        match closest_hit {
+            Some(hit) => Some(hit.unwrap()),
+            None => None
+        }
+    }
+}
+
 #[wasm_bindgen]
 #[derive(Copy, Clone, Debug)]
 pub struct Camera {
@@ -600,6 +640,12 @@ fn empty_cornell_box(rng: &mut ThreadRng) -> Vec<Box<dyn Hittable>> {
     world.push(Box::new(XZRect::new(0.0, 555.0, 0.0, 555.0, 0.0, white.clone())));
     world.push(Box::new(XZRect::new(0.0, 555.0, 0.0, 555.0, 555.0, white.clone())));
     world.push(Box::new(XYRect::new(0.0, 555.0, 0.0, 555.0, 555.0, white.clone())));
+
+    world.push(Box::new(Cube::new(&Point::new(130.0, 0.0, 65.0),
+                                  &Point::new(295.0, 165.0, 230.0), white.clone())));
+
+    world.push(Box::new(Cube::new(&Point::new(265.0, 0.0, 295.0),
+                                  &Point::new(430.0, 330.0, 460.0), white.clone())));
 
     world
 }
